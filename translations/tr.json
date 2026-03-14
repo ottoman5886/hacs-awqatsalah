@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AwqatSalah - API Yapılandırması",
+        "description": "Lütfen API anahtarını ve URL'yi girin",
+        "data": {
+          "api_key": "API Anahtarı",
+          "api_url": "API URL",
+          "language": "Dil"
+        }
+      },
+      "country": {
+        "title": "Ülke Seçin",
+        "data": {
+          "country_id": "Ülke"
+        }
+      },
+      "state": {
+        "title": "Bölge Seçin",
+        "data": {
+          "state_id": "Bölge"
+        }
+      },
+      "city": {
+        "title": "Şehir Seçin",
+        "data": {
+          "city_id": "Şehir"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "API bağlantısı başarısız",
+      "cannot_fetch_countries": "Ülkeler yüklenemedi",
+      "cannot_fetch_states": "Bölgeler yüklenemedi",
+      "cannot_fetch_cities": "Şehirler yüklenemedi"
+    },
+    "abort": {
+      "already_configured": "Entegrasyon zaten yapılandırılmış"
+    }
+  }
+}
