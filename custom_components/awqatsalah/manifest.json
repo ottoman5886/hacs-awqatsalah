@@ -8,5 +8,6 @@
   "codeowners": ["@ottoman5886"],
   "requirements": [],
   "iot_class": "cloud_polling",
+  "config_flow": true,
   "hacs": "1.0.0"
 }
