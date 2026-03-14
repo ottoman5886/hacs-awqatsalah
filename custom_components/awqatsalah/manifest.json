@@ -1,0 +1,12 @@
+{
+  "domain": "awqatsalah",
+  "name": "AwqatSalah - Diyanet Gebetszeiten",
+  "version": "1.0.0",
+  "documentation": "https://github.com/ottoman5886/hacs-awqatsalah",
+  "issue_tracker": "https://github.com/ottoman5886/hacs-awqatsalah/issues",
+  "dependencies": [],
+  "codeowners": ["@ottoman5886"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "hacs": "1.0.0"
+}
