@@ -20,7 +20,7 @@ Home Assistant Integration für Diyanet Gebetszeiten via [AwqatSalah API](https:
 ### Via HACS (empfohlen)
 
 1. HACS → Integrationen → ⋮ → **Custom Repositories**
-2. URL: `https://github.com/DEINNAME/hacs-awqatsalah`
+2. URL: `https://github.com/ottoman5886/hacs-awqatsalah`
 3. Kategorie: **Integration**
 4. **Add** → **Download**
 5. Home Assistant neu starten
@@ -120,7 +120,7 @@ Eid → jährlich neu von API
 
 - Home Assistant 2026.2.0+
 - HACS installiert
-- Eigene [AwqatSalah API](https://github.com/DEINNAME/awqatsalah-api) Instanz
+- Eigene [AwqatSalah API](https://github.com/ottoman5886/AwqatSalah) Instanz
 - API Key
 
 ---
