@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AwqatSalah - إعداد API",
+        "description": "الرجاء إدخال مفتاح API والرابط",
+        "data": {
+          "api_key": "مفتاح API",
+          "api_url": "رابط API",
+          "language": "اللغة"
+        }
+      },
+      "country": {
+        "title": "اختر الدولة",
+        "data": {
+          "country_id": "الدولة"
+        }
+      },
+      "state": {
+        "title": "اختر المنطقة",
+        "data": {
+          "state_id": "المنطقة"
+        }
+      },
+      "city": {
+        "title": "اختر المدينة",
+        "data": {
+          "city_id": "المدينة"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "فشل الاتصال بـ API",
+      "cannot_fetch_countries": "تعذر تحميل الدول",
+      "cannot_fetch_states": "تعذر تحميل المناطق",
+      "cannot_fetch_cities": "تعذر تحميل المدن"
+    },
+    "abort": {
+      "already_configured": "التكامل مُهيأ بالفعل"
+    }
+  }
+}
