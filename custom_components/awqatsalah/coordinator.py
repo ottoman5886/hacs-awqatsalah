@@ -46,10 +46,12 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         # Erst aus lokalem Cache lesen
         await self._load_cache()
 
+        # Monats-Refresh prüfen
+        await self.async_check_and_refresh_month()
+
         # Prüfen ob heute im Cache vorhanden
         if self._get_today_from_cache(today):
             _LOGGER.debug("[AwqatSalah] Cache-Treffer für heute: %s", today)
-            await self._ping_api()  # API täglich anpingen
             return self._get_today_from_cache(today)
 
         # Cache leer oder abgelaufen → neu laden
@@ -114,7 +116,6 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         if monthly:
             _LOGGER.info("[AwqatSalah] Monats-Daten geladen: %d Einträge", len(monthly))
             existing = self._cached_data.get("entries", [])
-            # Neue Einträge hinzufügen ohne Duplikate
             existing_dates = {e.get("gregorianDateShort") for e in existing}
             for entry in monthly:
                 if entry.get("gregorianDateShort") not in existing_dates:
@@ -151,7 +152,7 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
                     if response.status == 200:
                         data = await response.json()
                         entries = data.get("data", [])
-                        if entries and len(entries) > 31:  # Mehr als ein Monat
+                        if entries and len(entries) > 31:
                             return entries
                     _LOGGER.warning("[AwqatSalah] Yearly fehlgeschlagen: %s", response.status)
                     return None
@@ -177,3 +178,31 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         except Exception as ex:
             _LOGGER.warning("[AwqatSalah] Monthly Fehler: %s", ex)
             return None
+
+    async def _load_cache(self) -> None:
+        """Cache aus HA Storage laden."""
+        if self._cached_data:
+            return
+        data = await self._store.async_load()
+        if data:
+            cached_year = data.get("year")
+            if cached_year and cached_year != datetime.now().year:
+                _LOGGER.info("[AwqatSalah] Jahreswechsel erkannt, Cache wird erneuert")
+                self._cached_data = {}
+                return
+            self._cached_data = data
+            _LOGGER.info("[AwqatSalah] Cache geladen: %d Einträge", len(data.get("entries", [])))
+
+    async def _save_cache(self) -> None:
+        """Cache in HA Storage speichern."""
+        await self._store.async_save(self._cached_data)
+        _LOGGER.info("[AwqatSalah] Cache gespeichert")
+
+    async def async_check_and_refresh_month(self) -> None:
+        """Prüfen ob neuer Monat benötigt wird."""
+        if self._cached_data.get("type") == "monthly":
+            cached_month = self._cached_data.get("month")
+            if cached_month and cached_month != datetime.now().month:
+                _LOGGER.info("[AwqatSalah] Neuer Monat erkannt, lade neue Daten")
+                self._cached_data = {}
+                await self._fetch_and_cache()
