@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AwqatSalah - API Configuration",
+        "description": "Please enter API key and URL",
+        "data": {
+          "api_key": "API Key",
+          "api_url": "API URL",
+          "language": "Language"
+        }
+      },
+      "country": {
+        "title": "Select Country",
+        "data": {
+          "country_id": "Country"
+        }
+      },
+      "state": {
+        "title": "Select Region",
+        "data": {
+          "state_id": "Region"
+        }
+      },
+      "city": {
+        "title": "Select City",
+        "data": {
+          "city_id": "City"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to API",
+      "cannot_fetch_countries": "Could not load countries",
+      "cannot_fetch_states": "Could not load regions",
+      "cannot_fetch_cities": "Could not load cities"
+    },
+    "abort": {
+      "already_configured": "Integration already configured"
+    }
+  }
+}
