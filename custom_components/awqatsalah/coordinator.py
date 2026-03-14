@@ -12,6 +12,8 @@ from .const import (
     CONF_CITY_ID,
     DEFAULT_SCAN_INTERVAL,
     API_FIELD_MAP,
+    DAILY_CONTENT_FIELD_MAP,
+    EID_FIELD_MAP,
     SENSOR_SABAH,
 )
 
@@ -19,6 +21,8 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "awqatsalah_cache"
+STORAGE_KEY_DAILY = "awqatsalah_daily_content"
+STORAGE_KEY_EID = "awqatsalah_eid"
 
 
 class AwqatSalahCoordinator(DataUpdateCoordinator):
@@ -37,32 +41,48 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         self.api_url = config[CONF_API_URL]
         self.city_id = config[CONF_CITY_ID]
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store_daily = Store(hass, STORAGE_VERSION, STORAGE_KEY_DAILY)
+        self._store_eid = Store(hass, STORAGE_VERSION, STORAGE_KEY_EID)
         self._cached_data: dict = {}
+        self._cached_daily: dict = {}
+        self._cached_eid: dict = {}
 
     async def _async_update_data(self) -> dict:
         """Daten aktualisieren – täglich aufgerufen."""
         today = datetime.now().strftime("%d.%m.%Y")
 
-        # Erst aus lokalem Cache lesen
+        # Cache laden
         await self._load_cache()
+        await self._load_daily_cache()
+        await self._load_eid_cache()
 
         # Monats-Refresh prüfen
         await self.async_check_and_refresh_month()
 
-        # Prüfen ob heute im Cache vorhanden
-        if self._get_today_from_cache(today):
-            _LOGGER.debug("[AwqatSalah] Cache-Treffer für heute: %s", today)
-            return self._get_today_from_cache(today)
+        # Gebetszeiten
+        prayer_data = self._get_today_from_cache(today)
+        if not prayer_data:
+            _LOGGER.info("[AwqatSalah] Cache leer, lade Gebetszeiten von API")
+            await self._fetch_and_cache()
+            prayer_data = self._get_today_from_cache(today)
 
-        # Cache leer oder abgelaufen → neu laden
-        _LOGGER.info("[AwqatSalah] Cache leer, lade Daten von API")
-        await self._fetch_and_cache()
+        if not prayer_data:
+            raise UpdateFailed("Keine Gebetszeiten für heute verfügbar")
 
-        today_data = self._get_today_from_cache(today)
-        if today_data:
-            return today_data
+        # DailyContent
+        daily_content = await self._get_daily_content(today)
 
-        raise UpdateFailed("Keine Daten für heute verfügbar")
+        # Eid
+        eid_data = await self._get_eid_data()
+
+        # Alles zusammenführen
+        result = prayer_data.copy()
+        if daily_content:
+            result.update(daily_content)
+        if eid_data:
+            result.update(eid_data)
+
+        return result
 
     def _get_today_from_cache(self, today: str) -> dict | None:
         """Heutigen Tag aus Cache holen."""
@@ -76,7 +96,6 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         """Eintrag verarbeiten und Sabah berechnen."""
         result = {}
 
-        # API Felder mappen
         for sensor, api_field in API_FIELD_MAP.items():
             result[sensor] = entry.get(api_field, "")
 
@@ -90,15 +109,75 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             except Exception:
                 result[SENSOR_SABAH] = ""
 
-        # Zusätzliche Felder
         result["hijriDateLong"] = entry.get("hijriDateLong", "")
         result["gregorianDateShort"] = entry.get("gregorianDateShort", "")
 
         return result
 
+    async def _get_daily_content(self, today: str) -> dict | None:
+        """DailyContent holen – täglich neu."""
+        cached_date = self._cached_daily.get("date")
+        if cached_date == today and self._cached_daily.get("data"):
+            _LOGGER.debug("[AwqatSalah] DailyContent Cache-Treffer")
+            return self._cached_daily["data"]
+
+        # Neu laden
+        _LOGGER.info("[AwqatSalah] Lade DailyContent von API")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_url}/api/DailyContent",
+                    headers={"X-API-Key": self.api_key},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        raw = data.get("data", {})
+                        result = {}
+                        for sensor, api_field in DAILY_CONTENT_FIELD_MAP.items():
+                            result[sensor] = raw.get(api_field, "")
+
+                        self._cached_daily = {"date": today, "data": result}
+                        await self._store_daily.async_save(self._cached_daily)
+                        return result
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] DailyContent Fehler: %s", ex)
+
+        return self._cached_daily.get("data")
+
+    async def _get_eid_data(self) -> dict | None:
+        """Eid Daten holen – jährlich neu."""
+        cached_year = self._cached_eid.get("year")
+        if cached_year == datetime.now().year and self._cached_eid.get("data"):
+            _LOGGER.debug("[AwqatSalah] Eid Cache-Treffer")
+            return self._cached_eid["data"]
+
+        # Neu laden
+        _LOGGER.info("[AwqatSalah] Lade Eid Daten von API")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_url}/api/AwqatSalah/Eid/{self.city_id}",
+                    headers={"X-API-Key": self.api_key},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        raw = data.get("data", {})
+                        result = {}
+                        for sensor, api_field in EID_FIELD_MAP.items():
+                            result[sensor] = raw.get(api_field, "")
+
+                        self._cached_eid = {"year": datetime.now().year, "data": result}
+                        await self._store_eid.async_save(self._cached_eid)
+                        return result
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] Eid Fehler: %s", ex)
+
+        return self._cached_eid.get("data")
+
     async def _fetch_and_cache(self) -> None:
         """Daten von API laden und cachen."""
-        # Erst Yearly versuchen
         yearly = await self._fetch_yearly()
         if yearly:
             _LOGGER.info("[AwqatSalah] Jahres-Daten geladen: %d Einträge", len(yearly))
@@ -111,7 +190,6 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             await self._save_cache()
             return
 
-        # Fallback: Monthly
         monthly = await self._fetch_monthly()
         if monthly:
             _LOGGER.info("[AwqatSalah] Monats-Daten geladen: %d Einträge", len(monthly))
@@ -180,7 +258,7 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             return None
 
     async def _load_cache(self) -> None:
-        """Cache aus HA Storage laden."""
+        """Gebetszeiten Cache laden."""
         if self._cached_data:
             return
         data = await self._store.async_load()
@@ -193,8 +271,24 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             self._cached_data = data
             _LOGGER.info("[AwqatSalah] Cache geladen: %d Einträge", len(data.get("entries", [])))
 
+    async def _load_daily_cache(self) -> None:
+        """DailyContent Cache laden."""
+        if self._cached_daily:
+            return
+        data = await self._store_daily.async_load()
+        if data:
+            self._cached_daily = data
+
+    async def _load_eid_cache(self) -> None:
+        """Eid Cache laden."""
+        if self._cached_eid:
+            return
+        data = await self._store_eid.async_load()
+        if data:
+            self._cached_eid = data
+
     async def _save_cache(self) -> None:
-        """Cache in HA Storage speichern."""
+        """Cache speichern."""
         await self._store.async_save(self._cached_data)
         _LOGGER.info("[AwqatSalah] Cache gespeichert")
 
