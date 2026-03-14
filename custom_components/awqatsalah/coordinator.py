@@ -1,0 +1,179 @@
+"""Coordinator für AwqatSalah Integration."""
+import logging
+import aiohttp
+from datetime import datetime, timedelta
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from .const import (
+    DOMAIN,
+    CONF_API_KEY,
+    CONF_API_URL,
+    CONF_CITY_ID,
+    DEFAULT_SCAN_INTERVAL,
+    API_FIELD_MAP,
+    SENSOR_SABAH,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+STORAGE_VERSION = 1
+STORAGE_KEY = "awqatsalah_cache"
+
+
+class AwqatSalahCoordinator(DataUpdateCoordinator):
+    """Koordiniert die Gebetszeiten Daten."""
+
+    def __init__(self, hass: HomeAssistant, config: dict) -> None:
+        """Initialisierung."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+        )
+        self.config = config
+        self.api_key = config[CONF_API_KEY]
+        self.api_url = config[CONF_API_URL]
+        self.city_id = config[CONF_CITY_ID]
+        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._cached_data: dict = {}
+
+    async def _async_update_data(self) -> dict:
+        """Daten aktualisieren – täglich aufgerufen."""
+        today = datetime.now().strftime("%d.%m.%Y")
+
+        # Erst aus lokalem Cache lesen
+        await self._load_cache()
+
+        # Prüfen ob heute im Cache vorhanden
+        if self._get_today_from_cache(today):
+            _LOGGER.debug("[AwqatSalah] Cache-Treffer für heute: %s", today)
+            await self._ping_api()  # API täglich anpingen
+            return self._get_today_from_cache(today)
+
+        # Cache leer oder abgelaufen → neu laden
+        _LOGGER.info("[AwqatSalah] Cache leer, lade Daten von API")
+        await self._fetch_and_cache()
+
+        today_data = self._get_today_from_cache(today)
+        if today_data:
+            return today_data
+
+        raise UpdateFailed("Keine Daten für heute verfügbar")
+
+    def _get_today_from_cache(self, today: str) -> dict | None:
+        """Heutigen Tag aus Cache holen."""
+        entries = self._cached_data.get("entries", [])
+        for entry in entries:
+            if entry.get("gregorianDateShort") == today:
+                return self._process_entry(entry)
+        return None
+
+    def _process_entry(self, entry: dict) -> dict:
+        """Eintrag verarbeiten und Sabah berechnen."""
+        result = {}
+
+        # API Felder mappen
+        for sensor, api_field in API_FIELD_MAP.items():
+            result[sensor] = entry.get(api_field, "")
+
+        # Sabah = Güneş - 60 Minuten
+        gunes = entry.get("sunrise", "")
+        if gunes:
+            try:
+                h, m = map(int, gunes.split(":"))
+                total = h * 60 + m - 60
+                result[SENSOR_SABAH] = f"{total // 60:02d}:{total % 60:02d}"
+            except Exception:
+                result[SENSOR_SABAH] = ""
+
+        # Zusätzliche Felder
+        result["hijriDateLong"] = entry.get("hijriDateLong", "")
+        result["gregorianDateShort"] = entry.get("gregorianDateShort", "")
+
+        return result
+
+    async def _fetch_and_cache(self) -> None:
+        """Daten von API laden und cachen."""
+        # Erst Yearly versuchen
+        yearly = await self._fetch_yearly()
+        if yearly:
+            _LOGGER.info("[AwqatSalah] Jahres-Daten geladen: %d Einträge", len(yearly))
+            self._cached_data = {
+                "type": "yearly",
+                "year": datetime.now().year,
+                "entries": yearly,
+                "fetched_at": datetime.now().isoformat(),
+            }
+            await self._save_cache()
+            return
+
+        # Fallback: Monthly
+        monthly = await self._fetch_monthly()
+        if monthly:
+            _LOGGER.info("[AwqatSalah] Monats-Daten geladen: %d Einträge", len(monthly))
+            existing = self._cached_data.get("entries", [])
+            # Neue Einträge hinzufügen ohne Duplikate
+            existing_dates = {e.get("gregorianDateShort") for e in existing}
+            for entry in monthly:
+                if entry.get("gregorianDateShort") not in existing_dates:
+                    existing.append(entry)
+            self._cached_data = {
+                "type": "monthly",
+                "year": datetime.now().year,
+                "month": datetime.now().month,
+                "entries": existing,
+                "fetched_at": datetime.now().isoformat(),
+            }
+            await self._save_cache()
+            return
+
+        _LOGGER.error("[AwqatSalah] Keine Daten von API verfügbar")
+
+    async def _fetch_yearly(self) -> list | None:
+        """Jahres-Daten von API laden."""
+        year = datetime.now().year
+        url = f"{self.api_url}/api/AwqatSalah/Yearly"
+        payload = {
+            "cityId": self.city_id,
+            "startDate": f"{year}-01-01T00:00:00Z",
+            "endDate": f"{year}-12-31T00:00:00Z",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers={"X-API-Key": self.api_key},
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        entries = data.get("data", [])
+                        if entries and len(entries) > 31:  # Mehr als ein Monat
+                            return entries
+                    _LOGGER.warning("[AwqatSalah] Yearly fehlgeschlagen: %s", response.status)
+                    return None
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] Yearly Fehler: %s", ex)
+            return None
+
+    async def _fetch_monthly(self) -> list | None:
+        """Monats-Daten von API laden."""
+        url = f"{self.api_url}/api/AwqatSalah/Monthly/{self.city_id}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers={"X-API-Key": self.api_key},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("data", [])
+                    _LOGGER.warning("[AwqatSalah] Monthly fehlgeschlagen: %s", response.status)
+                    return None
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] Monthly Fehler: %s", ex)
+            return None
