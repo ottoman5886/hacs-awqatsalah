@@ -2,7 +2,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
-Home Assistant Integration für Diyanet Gebetszeiten via [AwqatSalah API](https://github.com/ottoman5886/awqatsalah-api).
+Home Assistant Integration für Diyanet Gebetszeiten via [AwqatSalah API](https://github.com/ottoman5886/AwqatSalah).
 
 ## Features
 
