@@ -2,41 +2,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "AwqatSalah - API Konfiguration",
-        "description": "Bitte API Key und URL eingeben",
+        "title": "AwqatSalah – Verbindung & Authentifizierung",
+        "description": "API URL und Authentifizierungs-Header eingeben. Header 1 ist Pflicht (z.B. X-API-Key). Header 2 ist optional (z.B. für Benutzername bei Login-APIs).",
         "data": {
-          "api_key": "API Key",
           "api_url": "API URL",
-          "language": "Sprache"
+          "language": "Sprache",
+          "header1_name": "Header 1 – Name",
+          "header1_value": "Header 1 – Wert",
+          "header2_name": "Header 2 – Name (optional)",
+          "header2_value": "Header 2 – Wert (optional)"
         }
       },
-      "country": {
-        "title": "Land auswählen",
-        "data": {
-          "country_id": "Land"
-        }
-      },
-      "state": {
-        "title": "Region auswählen",
-        "data": {
-          "state_id": "Region"
-        }
-      },
-      "city": {
-        "title": "Stadt auswählen",
-        "data": {
-          "city_id": "Stadt"
-        }
-      }
+      "country": { "title": "AwqatSalah – Land auswählen", "data": { "country_id": "Land" } },
+      "state":   { "title": "AwqatSalah – Region auswählen", "data": { "state_id": "Region" } },
+      "city":    { "title": "AwqatSalah – Stadt auswählen", "data": { "city_id": "Stadt" } }
     },
     "error": {
-      "cannot_connect": "Verbindung zur API fehlgeschlagen",
-      "cannot_fetch_countries": "Länder konnten nicht geladen werden",
-      "cannot_fetch_states": "Regionen konnten nicht geladen werden",
-      "cannot_fetch_cities": "Städte konnten nicht geladen werden"
+      "cannot_connect": "Keine Verbindung zur API. URL und Netzwerk prüfen.",
+      "header1_required": "Header 1 Name und Wert sind Pflichtfelder.",
+      "cannot_fetch_countries": "Verbunden, aber Länderliste konnte nicht geladen werden.",
+      "cannot_fetch_states": "Regionen für dieses Land konnten nicht geladen werden.",
+      "cannot_fetch_cities": "Städte für diese Region konnten nicht geladen werden."
     },
-    "abort": {
-      "already_configured": "Integration bereits konfiguriert"
-    }
+    "abort": { "already_configured": "Diese Stadt ist bereits konfiguriert." }
   }
 }
