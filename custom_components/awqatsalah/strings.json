@@ -10,7 +10,8 @@
           "header1_name": "Header 1 – Name",
           "header1_value": "Header 1 – Value",
           "header2_name": "Header 2 – Name (optional)",
-          "header2_value": "Header 2 – Value (optional)"
+          "header2_value": "Header 2 – Value (optional)",
+          "city_id": "City ID (optional, skips city selection)"
         }
       },
       "country": {
