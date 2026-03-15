@@ -62,6 +62,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._header1_value = ""
         self._header2_name = ""
         self._header2_value = ""
+        self._direct_city_id = None  # optional: skip country/state/city steps
         self._country_id = None
         self._country_name = None
         self._state_id = None
@@ -84,11 +85,32 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._header2_name  = (user_input.get(CONF_HEADER2_NAME)  or "").strip()
             self._header2_value = (user_input.get(CONF_HEADER2_VALUE) or "").strip()
 
+            # Optionale direkte City ID
+            raw_city = str(user_input.get(CONF_CITY_ID) or "").strip()
+            self._direct_city_id = int(raw_city) if raw_city.isdigit() else None
+
             # Header1 Name + Value sind Pflicht
             if not self._header1_name or not self._header1_value:
                 errors["base"] = "header1_required"
+            elif self._direct_city_id:
+                # City ID direkt angegeben → Dropdown überspringen
+                return self.async_create_entry(
+                    title=f"AwqatSalah – City {self._direct_city_id}",
+                    data={
+                        CONF_API_URL:       self._api_url,
+                        CONF_LANGUAGE:      self._language,
+                        CONF_HEADER1_NAME:  self._header1_name,
+                        CONF_HEADER1_VALUE: self._header1_value,
+                        CONF_HEADER2_NAME:  self._header2_name,
+                        CONF_HEADER2_VALUE: self._header2_value,
+                        CONF_COUNTRY_ID:    None,
+                        CONF_STATE_ID:      None,
+                        CONF_CITY_ID:       self._direct_city_id,
+                        CONF_CITY_NAME:     f"City {self._direct_city_id}",
+                    },
+                )
             else:
-                # Direkt Länder laden – kein separater Health-Check.
+                # Kein direkter City ID → Länder laden für Dropdown
                 # Render.com braucht beim Aufwachen bis zu 90 Sek → langer Timeout + 1 Retry.
                 self._countries = await self._fetch_countries()
                 if self._countries:
@@ -109,6 +131,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_HEADER1_VALUE): str,
                 vol.Optional(CONF_HEADER2_NAME, default=""): str,
                 vol.Optional(CONF_HEADER2_VALUE, default=""): str,
+                vol.Optional(CONF_CITY_ID, default=""): str,
             }),
             errors=errors,
         )
