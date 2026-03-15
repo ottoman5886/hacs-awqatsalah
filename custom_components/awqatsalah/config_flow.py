@@ -87,12 +87,12 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Header1 Name + Value sind Pflicht
             if not self._header1_name or not self._header1_value:
                 errors["base"] = "header1_required"
-            elif await self._test_api():
+            else:
+                # Direkt Länder laden – kein separater Health-Check.
+                # Render.com braucht beim Aufwachen bis zu 90 Sek → langer Timeout + 1 Retry.
                 self._countries = await self._fetch_countries()
                 if self._countries:
                     return await self.async_step_country()
-                errors["base"] = "cannot_fetch_countries"
-            else:
                 errors["base"] = "cannot_connect"
 
         return self.async_show_form(
@@ -223,31 +223,31 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         })
 
     async def _test_api(self) -> bool:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self._api_url}/health",
-                    headers=self._get_headers(),
-                    timeout=aiohttp.ClientTimeout(total=60),
-                ) as response:
-                    return response.status == 200
-        except Exception as ex:
-            _LOGGER.error("[AwqatSalah] API Test fehlgeschlagen: %s", ex)
-            return False
+        # Nicht mehr verwendet – _fetch_countries übernimmt die Verbindungsprüfung
+        return True
 
     async def _fetch_countries(self) -> list:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self._api_url}/api/v2/Place/Countries",
-                    headers=self._get_headers(),
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get("data", [])
-        except Exception as ex:
-            _LOGGER.error("[AwqatSalah] Länder laden fehlgeschlagen: %s", ex)
+        """Länder laden – mit langem Timeout für Render.com Aufwachzeit + 1 Retry."""
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self._api_url}/api/v2/Place/Countries",
+                        headers=self._get_headers(),
+                        timeout=aiohttp.ClientTimeout(total=90),
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data.get("data", [])
+                        _LOGGER.warning(
+                            "[AwqatSalah] Länder: HTTP %s (Versuch %d)",
+                            response.status, attempt + 1,
+                        )
+            except Exception as ex:
+                _LOGGER.warning(
+                    "[AwqatSalah] Länder laden fehlgeschlagen (Versuch %d): %s",
+                    attempt + 1, ex,
+                )
         return []
 
     async def _fetch_states(self, country_id: int) -> list:
