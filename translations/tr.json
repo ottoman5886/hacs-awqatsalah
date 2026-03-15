@@ -2,41 +2,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "AwqatSalah - API Yapılandırması",
-        "description": "Lütfen API anahtarını ve URL'yi girin",
+        "title": "AwqatSalah – Bağlantı & Kimlik Doğrulama",
+        "description": "API URL ve kimlik doğrulama başlıklarını girin. Header 1 zorunludur (ör. X-API-Key). Header 2 isteğe bağlıdır.",
         "data": {
-          "api_key": "API Anahtarı",
           "api_url": "API URL",
-          "language": "Dil"
+          "language": "Dil",
+          "header1_name": "Header 1 – Ad",
+          "header1_value": "Header 1 – Değer",
+          "header2_name": "Header 2 – Ad (isteğe bağlı)",
+          "header2_value": "Header 2 – Değer (isteğe bağlı)"
         }
       },
-      "country": {
-        "title": "Ülke Seçin",
-        "data": {
-          "country_id": "Ülke"
-        }
-      },
-      "state": {
-        "title": "Bölge Seçin",
-        "data": {
-          "state_id": "Bölge"
-        }
-      },
-      "city": {
-        "title": "Şehir Seçin",
-        "data": {
-          "city_id": "Şehir"
-        }
-      }
+      "country": { "title": "AwqatSalah – Ülke Seçin", "data": { "country_id": "Ülke" } },
+      "state":   { "title": "AwqatSalah – Şehir Seçin", "data": { "state_id": "Şehir" } },
+      "city":    { "title": "AwqatSalah – İlçe Seçin", "data": { "city_id": "İlçe" } }
     },
     "error": {
-      "cannot_connect": "API bağlantısı başarısız",
-      "cannot_fetch_countries": "Ülkeler yüklenemedi",
-      "cannot_fetch_states": "Bölgeler yüklenemedi",
-      "cannot_fetch_cities": "Şehirler yüklenemedi"
+      "cannot_connect": "API'ye bağlanılamıyor.",
+      "header1_required": "Header 1 adı ve değeri zorunludur.",
+      "cannot_fetch_countries": "Ülke listesi yüklenemedi.",
+      "cannot_fetch_states": "Şehirler yüklenemedi.",
+      "cannot_fetch_cities": "İlçeler yüklenemedi."
     },
-    "abort": {
-      "already_configured": "Entegrasyon zaten yapılandırılmış"
-    }
+    "abort": { "already_configured": "Bu şehir zaten yapılandırılmış." }
   }
 }
