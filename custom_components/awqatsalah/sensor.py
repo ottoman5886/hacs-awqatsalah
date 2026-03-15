@@ -80,8 +80,7 @@ class AwqatSalahSensor(CoordinatorEntity, SensorEntity):
     @property
     def name(self) -> str:
         names = SENSOR_NAMES.get(self._language, SENSOR_NAMES["de"])
-        sensor_name = names.get(self._sensor_key, self._sensor_key)
-        return f"{sensor_name} ({self._city_name})"
+        return names.get(self._sensor_key, self._sensor_key)
 
     @property
     def state(self) -> str:
