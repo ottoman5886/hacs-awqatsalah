@@ -2,41 +2,39 @@
   "config": {
     "step": {
       "user": {
-        "title": "AwqatSalah - إعداد API",
-        "description": "الرجاء إدخال مفتاح API والرابط",
+        "title": "AwqatSalah – Connection & Authentication",
+        "description": "Enter your API URL and authentication headers. Header 1 is required (e.g. X-API-Key). Header 2 is optional (e.g. for username/password based APIs).",
         "data": {
-          "api_key": "مفتاح API",
-          "api_url": "رابط API",
-          "language": "اللغة"
+          "api_url": "API URL",
+          "language": "Language",
+          "header1_name": "Header 1 – Name",
+          "header1_value": "Header 1 – Value",
+          "header2_name": "Header 2 – Name (optional)",
+          "header2_value": "Header 2 – Value (optional)"
         }
       },
       "country": {
-        "title": "اختر الدولة",
-        "data": {
-          "country_id": "الدولة"
-        }
+        "title": "AwqatSalah – Select Country",
+        "data": { "country_id": "Country" }
       },
       "state": {
-        "title": "اختر المنطقة",
-        "data": {
-          "state_id": "المنطقة"
-        }
+        "title": "AwqatSalah – Select Region",
+        "data": { "state_id": "Region" }
       },
       "city": {
-        "title": "اختر المدينة",
-        "data": {
-          "city_id": "المدينة"
-        }
+        "title": "AwqatSalah – Select City",
+        "data": { "city_id": "City" }
       }
     },
     "error": {
-      "cannot_connect": "فشل الاتصال بـ API",
-      "cannot_fetch_countries": "تعذر تحميل الدول",
-      "cannot_fetch_states": "تعذر تحميل المناطق",
-      "cannot_fetch_cities": "تعذر تحميل المدن"
+      "cannot_connect": "Cannot connect to API. Check URL and network.",
+      "header1_required": "Header 1 name and value are required.",
+      "cannot_fetch_countries": "Connected, but could not load country list.",
+      "cannot_fetch_states": "Could not load regions for this country.",
+      "cannot_fetch_cities": "Could not load cities for this region."
     },
     "abort": {
-      "already_configured": "التكامل مُهيأ بالفعل"
+      "already_configured": "This city is already configured."
     }
   }
 }
