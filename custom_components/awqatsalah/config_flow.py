@@ -12,18 +12,42 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     DOMAIN,
-    CONF_API_KEY,
     CONF_API_URL,
     CONF_CITY_ID,
     CONF_COUNTRY_ID,
     CONF_STATE_ID,
     CONF_CITY_NAME,
     CONF_LANGUAGE,
+    CONF_HEADER1_NAME,
+    CONF_HEADER1_VALUE,
+    CONF_HEADER2_NAME,
+    CONF_HEADER2_VALUE,
     DEFAULT_API_URL,
     LANGUAGES,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _build_headers(data: dict) -> dict:
+    """Aus den gespeicherten Name/Value-Paaren echte Request-Header bauen.
+
+    Leere Namen oder Werte werden übersprungen.
+    Beispiele:
+      Self-hosted  → header1_name=X-API-Key, header1_value=abc123
+      Diyanet JWT  → header1_name=Authorization, header1_value=Bearer <token>
+                     (Token wird vom Coordinator dynamisch ersetzt)
+    """
+    headers = {}
+    for name_key, value_key in [
+        (CONF_HEADER1_NAME, CONF_HEADER1_VALUE),
+        (CONF_HEADER2_NAME, CONF_HEADER2_VALUE),
+    ]:
+        name = (data.get(name_key) or "").strip()
+        value = (data.get(value_key) or "").strip()
+        if name and value:
+            headers[name] = value
+    return headers
 
 
 class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -32,9 +56,12 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self):
-        self._api_key = None
         self._api_url = None
         self._language = "de"
+        self._header1_name = ""
+        self._header1_value = ""
+        self._header2_name = ""
+        self._header2_value = ""
         self._country_id = None
         self._country_name = None
         self._state_id = None
@@ -43,16 +70,24 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._states = []
         self._cities = []
 
+    # ── Schritt 1: API URL + Sprache + Header ────────────────────────────────
+
     async def async_step_user(self, user_input=None):
-        """Schritt 1: API Key + URL + Sprache."""
+        """Schritt 1: Verbindung & Authentifizierung."""
         errors = {}
 
         if user_input is not None:
-            self._api_key = user_input[CONF_API_KEY]
             self._api_url = user_input.get(CONF_API_URL, DEFAULT_API_URL).rstrip("/")
             self._language = user_input.get(CONF_LANGUAGE, "de")
+            self._header1_name  = (user_input.get(CONF_HEADER1_NAME)  or "").strip()
+            self._header1_value = (user_input.get(CONF_HEADER1_VALUE) or "").strip()
+            self._header2_name  = (user_input.get(CONF_HEADER2_NAME)  or "").strip()
+            self._header2_value = (user_input.get(CONF_HEADER2_VALUE) or "").strip()
 
-            if await self._test_api():
+            # Header1 Name + Value sind Pflicht
+            if not self._header1_name or not self._header1_value:
+                errors["base"] = "header1_required"
+            elif await self._test_api():
                 self._countries = await self._fetch_countries()
                 if self._countries:
                     return await self.async_step_country()
@@ -63,7 +98,6 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
-                vol.Required(CONF_API_KEY): str,
                 vol.Optional(CONF_API_URL, default=DEFAULT_API_URL): str,
                 vol.Required(CONF_LANGUAGE, default="de"): SelectSelector(
                     SelectSelectorConfig(
@@ -71,21 +105,24 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Required(CONF_HEADER1_NAME, default="X-API-Key"): str,
+                vol.Required(CONF_HEADER1_VALUE): str,
+                vol.Optional(CONF_HEADER2_NAME, default=""): str,
+                vol.Optional(CONF_HEADER2_VALUE, default=""): str,
             }),
             errors=errors,
         )
 
+    # ── Schritt 2: Land ──────────────────────────────────────────────────────
+
     async def async_step_country(self, user_input=None):
-        """Schritt 2: Land auswählen."""
         errors = {}
-        # Name → ID Mapping
         country_map = {c["name"]: c["id"] for c in self._countries}
 
         if user_input is not None:
             country_name = user_input[CONF_COUNTRY_ID]
             self._country_id = country_map.get(country_name)
             self._country_name = country_name
-
             if self._country_id:
                 self._states = await self._fetch_states(self._country_id)
                 if self._states:
@@ -105,8 +142,9 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    # ── Schritt 3: Region ────────────────────────────────────────────────────
+
     async def async_step_state(self, user_input=None):
-        """Schritt 3: Region auswählen."""
         errors = {}
         state_map = {s["name"]: s["id"] for s in self._states}
 
@@ -114,7 +152,6 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             state_name = user_input[CONF_STATE_ID]
             self._state_id = state_map.get(state_name)
             self._state_name = state_name
-
             if self._state_id:
                 self._cities = await self._fetch_cities(self._state_id)
                 if self._cities:
@@ -134,26 +171,29 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    # ── Schritt 4: Stadt ─────────────────────────────────────────────────────
+
     async def async_step_city(self, user_input=None):
-        """Schritt 4: Stadt auswählen."""
         errors = {}
         city_map = {c["name"]: c["id"] for c in self._cities}
 
         if user_input is not None:
             city_name = user_input[CONF_CITY_ID]
             city_id = city_map.get(city_name)
-
             if city_id:
                 return self.async_create_entry(
                     title=city_name,
                     data={
-                        CONF_API_KEY: self._api_key,
-                        CONF_API_URL: self._api_url,
-                        CONF_COUNTRY_ID: self._country_id,
-                        CONF_STATE_ID: self._state_id,
-                        CONF_CITY_ID: city_id,
-                        CONF_CITY_NAME: city_name,
-                        CONF_LANGUAGE: self._language,
+                        CONF_API_URL:       self._api_url,
+                        CONF_LANGUAGE:      self._language,
+                        CONF_HEADER1_NAME:  self._header1_name,
+                        CONF_HEADER1_VALUE: self._header1_value,
+                        CONF_HEADER2_NAME:  self._header2_name,
+                        CONF_HEADER2_VALUE: self._header2_value,
+                        CONF_COUNTRY_ID:    self._country_id,
+                        CONF_STATE_ID:      self._state_id,
+                        CONF_CITY_ID:       city_id,
+                        CONF_CITY_NAME:     city_name,
                     },
                 )
             errors["base"] = "cannot_fetch_cities"
@@ -171,11 +211,23 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    # ── API Hilfsmethoden ────────────────────────────────────────────────────
+
+    def _get_headers(self) -> dict:
+        """Aktuelle Header aus den eingegebenen Feldern zusammenbauen."""
+        return _build_headers({
+            CONF_HEADER1_NAME:  self._header1_name,
+            CONF_HEADER1_VALUE: self._header1_value,
+            CONF_HEADER2_NAME:  self._header2_name,
+            CONF_HEADER2_VALUE: self._header2_value,
+        })
+
     async def _test_api(self) -> bool:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self._api_url}/health",
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=60),
                 ) as response:
                     return response.status == 200
@@ -188,7 +240,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self._api_url}/api/v2/Place/Countries",
-                    headers={"X-API-Key": self._api_key},
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status == 200:
@@ -203,7 +255,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self._api_url}/api/v2/Place/States/{country_id}",
-                    headers={"X-API-Key": self._api_key},
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status == 200:
@@ -218,7 +270,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self._api_url}/api/v2/Place/Cities/{state_id}",
-                    headers={"X-API-Key": self._api_key},
+                    headers=self._get_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status == 200:
