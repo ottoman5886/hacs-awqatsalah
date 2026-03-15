@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -35,18 +36,15 @@ async def async_setup_entry(
 
     entities = []
 
-    # Gebetszeiten Sensoren
     for sensor_key in PRAYER_SENSORS:
         if sensor_key == SENSOR_MOON_URL:
             entities.append(AwqatSalahImageSensor(coordinator, sensor_key, language, city_name, entry.entry_id))
         else:
             entities.append(AwqatSalahSensor(coordinator, sensor_key, language, city_name, entry.entry_id))
 
-    # DailyContent Sensoren
     for sensor_key in DAILY_CONTENT_SENSORS:
         entities.append(AwqatSalahSensor(coordinator, sensor_key, language, city_name, entry.entry_id))
 
-    # Eid Sensoren
     for sensor_key in EID_SENSORS:
         entities.append(AwqatSalahSensor(coordinator, sensor_key, language, city_name, entry.entry_id))
 
@@ -64,12 +62,16 @@ class AwqatSalahSensor(CoordinatorEntity, SensorEntity):
         city_name: str,
         entry_id: str,
     ) -> None:
-        """Initialisierung."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._language = language
         self._city_name = city_name
         self._entry_id = entry_id
+
+        # Stabile, sprachunabhängige Entity-ID
+        # z.B. sensor.awqatsalah_aksam_geesthacht – immer gleich, egal welche Sprache
+        city_slug = city_name.lower().replace(" ", "_").replace("-", "_")
+        self.entity_id = f"sensor.awqatsalah_{sensor_key}_{city_slug}"
 
     @property
     def unique_id(self) -> str:
@@ -136,8 +138,7 @@ class AwqatSalahSensor(CoordinatorEntity, SensorEntity):
             name=f"AwqatSalah - {self._city_name}",
             manufacturer="Diyanet İşleri Başkanlığı",
             model="Gebetszeiten API",
-            sw_version="1.1.0",
-            entry_type="service",
+            entry_type=DeviceEntryType.SERVICE,
         )
 
 
