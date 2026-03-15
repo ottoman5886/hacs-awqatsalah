@@ -1,13 +1,21 @@
 """Konstanten für AwqatSalah Integration."""
 
 DOMAIN = "awqatsalah"
-CONF_API_KEY = "api_key"
 CONF_API_URL = "api_url"
 CONF_CITY_ID = "city_id"
 CONF_COUNTRY_ID = "country_id"
 CONF_STATE_ID = "state_id"
 CONF_CITY_NAME = "city_name"
 CONF_LANGUAGE = "language"
+
+# Flexible Auth – zwei optionale Header-Paare
+CONF_HEADER1_NAME  = "header1_name"
+CONF_HEADER1_VALUE = "header1_value"
+CONF_HEADER2_NAME  = "header2_name"
+CONF_HEADER2_VALUE = "header2_value"
+
+# Legacy – damit bestehende Config Entries nicht brechen
+CONF_API_KEY = "api_key"
 
 DEFAULT_API_URL = "https://awqatsalah.onrender.com"
 DEFAULT_SCAN_INTERVAL = 86400  # 1x täglich
