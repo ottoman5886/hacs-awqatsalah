@@ -1,8 +1,10 @@
 """Sensoren für AwqatSalah Integration."""
 import logging
+from datetime import datetime, timedelta
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -128,14 +130,15 @@ class AwqatSalahSensor(CoordinatorEntity, SensorEntity):
         return icons.get(self._sensor_key, "mdi:clock")
 
     @property
-    def device_info(self) -> dict:
-        return {
-            "identifiers": {(DOMAIN, self._entry_id)},
-            "name": f"AwqatSalah - {self._city_name}",
-            "manufacturer": "Diyanet",
-            "model": "Gebetszeiten API",
-            "sw_version": "1.0.0",
-        }
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=f"AwqatSalah - {self._city_name}",
+            manufacturer="Diyanet İşleri Başkanlığı",
+            model="Gebetszeiten API",
+            sw_version="1.1.0",
+            entry_type="service",
+        )
 
 
 class AwqatSalahImageSensor(AwqatSalahSensor):
