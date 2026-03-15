@@ -93,9 +93,10 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not self._header1_name or not self._header1_value:
                 errors["base"] = "header1_required"
             elif self._direct_city_id:
-                # City ID direkt angegeben → Dropdown überspringen
+                # City ID direkt angegeben → echten Stadtnamen von API holen
+                city_name = await self._fetch_city_name(self._direct_city_id)
                 return self.async_create_entry(
-                    title=f"AwqatSalah – City {self._direct_city_id}",
+                    title=f"AwqatSalah – {city_name}",
                     data={
                         CONF_API_URL:       self._api_url,
                         CONF_LANGUAGE:      self._language,
@@ -106,7 +107,7 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_COUNTRY_ID:    None,
                         CONF_STATE_ID:      None,
                         CONF_CITY_ID:       self._direct_city_id,
-                        CONF_CITY_NAME:     f"City {self._direct_city_id}",
+                        CONF_CITY_NAME:     city_name,
                     },
                 )
             else:
@@ -302,3 +303,28 @@ class AwqatSalahConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except Exception as ex:
             _LOGGER.error("[AwqatSalah] Städte laden fehlgeschlagen: %s", ex)
         return []
+
+    async def _fetch_city_name(self, city_id: int) -> str:
+        """Echten Stadtnamen über CityDetail Endpoint holen."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self._api_url}/api/Place/CityDetail/{city_id}",
+                    headers=self._get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=90),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        detail = data.get("data", {})
+                        # API liefert name (TR) – nehmen was vorhanden
+                        name = (
+                            detail.get("name")
+                            or detail.get("cityEn")
+                            or detail.get("city")
+                            or ""
+                        ).strip().title()
+                        if name:
+                            return name
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] CityDetail fehlgeschlagen: %s", ex)
+        return str(city_id)
