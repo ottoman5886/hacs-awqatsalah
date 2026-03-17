@@ -102,7 +102,14 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
     @callback
     def _async_midnight_refresh(self, _now: datetime) -> None:
         _LOGGER.debug("[AwqatSalah] Midnight-Refresh ausgelöst")
-        self.hass.async_create_task(self.async_refresh())
+        # Daily-Cache (Memory + Storage) leeren damit neuer Tagesinhalt geladen wird
+        self._cached_daily = {}
+        self.hass.async_create_task(self._async_clear_daily_and_refresh())
+
+    async def _async_clear_daily_and_refresh(self) -> None:
+        """Daily-Storage leeren und dann Refresh ausführen."""
+        await self._store_daily.async_remove()
+        await self.async_refresh()
 
     # ── Hauptupdate ───────────────────────────────────────────────────────────
 
