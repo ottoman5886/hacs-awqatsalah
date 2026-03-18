@@ -212,15 +212,21 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
                     headers=self._headers,
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
+                    _LOGGER.debug("[AwqatSalah] DailyContent Status: %s", response.status)
                     if response.status == 200:
-                        data   = await response.json()
-                        raw    = data.get("data", {})
+                        text = await response.text()
+                        _LOGGER.debug("[AwqatSalah] DailyContent Response: %s", text[:200])
+                        import json
+                        data = json.loads(text)
+                        raw = data.get("data", {})
                         result = {s: raw.get(f) for s, f in DAILY_CONTENT_FIELD_MAP.items()}
                         self._cached_daily = {"date": today, "data": result}
                         await self._store_daily.async_save(self._cached_daily)
                         return result
+                    else:
+                        _LOGGER.warning("[AwqatSalah] DailyContent HTTP %s", response.status)
         except Exception as ex:
-            _LOGGER.warning("[AwqatSalah] DailyContent Fehler: %s", ex)
+            _LOGGER.warning("[AwqatSalah] DailyContent Fehler: %s – %s", type(ex).__name__, ex)
         return self._cached_daily.get("data")
 
     async def _get_eid_data(self) -> dict | None:
