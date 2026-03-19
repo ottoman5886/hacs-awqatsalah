@@ -1,9 +1,10 @@
 """Coordinator für AwqatSalah Integration."""
 import calendar
 import logging
-import aiohttp
 from datetime import datetime, timedelta
+
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -33,12 +34,7 @@ STORAGE_KEY_EID = "awqatsalah_eid"
 
 
 def _build_headers(config: dict) -> dict:
-    """Header aus Config zusammenbauen.
-
-    Unterstützt sowohl neue (header1_name/value) als auch
-    alte Config Entries (api_key) – damit bestehende Installationen
-    nach dem Update ohne Neueinrichtung weiterlaufen.
-    """
+    """Header aus Config zusammenbauen."""
     headers = {}
 
     # Neue flexible Header
@@ -69,9 +65,10 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
         self.config = config
-        self.api_url = config[CONF_API_URL]
+        self.api_url = config[CONF_API_URL].rstrip("/")
         self.city_id = config[CONF_CITY_ID]
         self._headers = _build_headers(config)
+        self._session = async_get_clientsession(hass)
 
         self._store       = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._store_daily = Store(hass, STORAGE_VERSION, STORAGE_KEY_DAILY)
@@ -83,60 +80,66 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
 
         self._midnight_unsub = None
 
-    # ── Feature 7: Midnight Refresh ──────────────────────────────────────────
+    # ── Refresh Logik ────────────────────────────────────────────────────────
 
     def async_setup_midnight_refresh(self) -> None:
-        """00:01 Uhr Refresh registrieren."""
+        """03:00 Uhr Refresh registrieren (Sicherheitsmarge für API-Updates)."""
         self._midnight_unsub = async_track_time_change(
             self.hass,
             self._async_midnight_refresh,
-            hour=0, minute=1, second=0,
+            hour=3, minute=0, second=0,
         )
-        _LOGGER.debug("[AwqatSalah] Midnight-Refresh um 00:01 registriert")
+        _LOGGER.debug("[AwqatSalah] Midnight-Refresh für 03:00 Uhr registriert")
 
     def async_unsubscribe_midnight(self) -> None:
+        """Trigger entfernen."""
         if self._midnight_unsub:
             self._midnight_unsub()
             self._midnight_unsub = None
 
     @callback
     def _async_midnight_refresh(self, _now: datetime) -> None:
-        _LOGGER.debug("[AwqatSalah] Midnight-Refresh ausgelöst")
-        # Daily-Cache (Memory + Storage) leeren damit neuer Tagesinhalt geladen wird
+        """Wird täglich um 03:00 aufgerufen."""
+        _LOGGER.debug("[AwqatSalah] Täglicher Refresh wird ausgeführt")
+        # Daily-Cache leeren, damit neue Daten erzwungen werden
         self._cached_daily = {}
         self.hass.async_create_task(self._async_clear_daily_and_refresh())
 
     async def _async_clear_daily_and_refresh(self) -> None:
-        """Daily-Storage leeren und dann Refresh ausführen."""
+        """Daily-Storage leeren und Update triggern."""
         await self._store_daily.async_remove()
         await self.async_refresh()
 
-    # ── Hauptupdate ───────────────────────────────────────────────────────────
+    # ── Hauptupdate ──────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict:
+        """Zentrales Daten-Update."""
         today = datetime.now().strftime("%d.%m.%Y")
 
+        # Caches laden falls nötig
         await self._load_cache()
         await self._load_daily_cache()
         await self._load_eid_cache()
 
+        # Monatsprüfung
         await self.async_check_and_refresh_month()
-
-        # Feature 4: Predictive Prefetch
         await self._async_prefetch_next_month_if_needed()
 
+        # Gebetszeiten holen
         prayer_data = self._get_today_from_cache(today)
         if not prayer_data:
-            _LOGGER.info("[AwqatSalah] Cache leer, lade Gebetszeiten von API")
+            _LOGGER.info("[AwqatSalah] Cache leer oder veraltet, lade von API")
             await self._fetch_and_cache()
             prayer_data = self._get_today_from_cache(today)
 
         if not prayer_data:
             raise UpdateFailed("Keine Gebetszeiten für heute verfügbar")
 
+        # Daily Content und Eid Daten laden
         daily_content = await self._get_daily_content(today)
         eid_data      = await self._get_eid_data()
 
+        # Alles zusammenführen
         result = prayer_data.copy()
         if daily_content:
             result.update(daily_content)
@@ -145,113 +148,71 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
 
         return result
 
-    # ── Feature 4: Predictive Prefetch ───────────────────────────────────────
-
-    async def _async_prefetch_next_month_if_needed(self) -> None:
-        now = datetime.now()
-        last_day = calendar.monthrange(now.year, now.month)[1]
-        if now.day < last_day - 1:
-            return
-
-        next_month = now.month + 1 if now.month < 12 else 1
-        next_year  = now.year if now.month < 12 else now.year + 1
-
-        next_month_str = f".{next_month:02d}.{next_year}"
-        already_cached = any(
-            next_month_str in e.get("gregorianDateShort", "")
-            for e in self._cached_data.get("entries", [])
-        )
-        if already_cached:
-            return
-
-        _LOGGER.info("[AwqatSalah] Predictive Prefetch: lade %02d/%d", next_month, next_year)
-        monthly = await self._fetch_monthly_for(next_month, next_year)
-        if monthly:
-            existing       = self._cached_data.get("entries", [])
-            existing_dates = {e.get("gregorianDateShort") for e in existing}
-            for entry in monthly:
-                if entry.get("gregorianDateShort") not in existing_dates:
-                    existing.append(entry)
-            self._cached_data["entries"] = existing
-            await self._save_cache()
-
-    # ── Cache & API ───────────────────────────────────────────────────────────
-
-    def _get_today_from_cache(self, today: str) -> dict | None:
-        for entry in self._cached_data.get("entries", []):
-            if entry.get("gregorianDateShort") == today:
-                return self._process_entry(entry)
-        return None
-
-    def _process_entry(self, entry: dict) -> dict:
-        result = {}
-        for sensor, api_field in API_FIELD_MAP.items():
-            result[sensor] = entry.get(api_field, "")
-
-        gunes = entry.get("sunrise", "")
-        if gunes:
-            try:
-                h, m = map(int, gunes.split(":"))
-                total = h * 60 + m - 60
-                result[SENSOR_SABAH] = f"{total // 60:02d}:{total % 60:02d}"
-            except Exception:
-                result[SENSOR_SABAH] = ""
-
-        result["hijriDateLong"]       = entry.get("hijriDateLong", "")
-        result["gregorianDateShort"]  = entry.get("gregorianDateShort", "")
-        return result
+    # ── API & Content Logik ──────────────────────────────────────────────────
 
     async def _get_daily_content(self, today: str) -> dict | None:
+        """Daily Content abrufen mit Validierung."""
+        # Falls wir für HEUTE schon Daten im Memory haben, nutzen wir diese
         if self._cached_daily.get("date") == today and self._cached_daily.get("data"):
             return self._cached_daily["data"]
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.api_url}/api/DailyContent",
-                    headers=self._headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    _LOGGER.debug("[AwqatSalah] DailyContent Status: %s", response.status)
-                    if response.status == 200:
-                        text = await response.text()
-                        _LOGGER.debug("[AwqatSalah] DailyContent Response: %s", text[:200])
-                        import json
-                        data = json.loads(text)
-                        raw = data.get("data", {})
-                        result = {s: raw.get(f) for s, f in DAILY_CONTENT_FIELD_MAP.items()}
+            async with self._session.get(
+                f"{self.api_url}/api/DailyContent",
+                headers=self._headers,
+                timeout=20,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    raw = data.get("data", {})
+                    
+                    # Mapping anwenden
+                    result = {s: raw.get(f) for s, f in DAILY_CONTENT_FIELD_MAP.items()}
+                    
+                    # VALIDIERUNG: Nur wenn mindestens ein Feld Inhalt hat, speichern wir für HEUTE
+                    # Das verhindert, dass leere API-Antworten den Cache für den Tag sperren
+                    if any(v is not None and v != "" for v in result.values()):
                         self._cached_daily = {"date": today, "data": result}
                         await self._store_daily.async_save(self._cached_daily)
+                        _LOGGER.debug("[AwqatSalah] DailyContent erfolgreich für %s aktualisiert", today)
                         return result
-                    else:
-                        _LOGGER.warning("[AwqatSalah] DailyContent HTTP %s", response.status)
+                    
+                    _LOGGER.warning("[AwqatSalah] DailyContent API lieferte leere Felder. Retry folgt.")
+                else:
+                    _LOGGER.warning("[AwqatSalah] DailyContent HTTP Fehler: %s", response.status)
+
         except Exception as ex:
-            _LOGGER.warning("[AwqatSalah] DailyContent Fehler: %s – %s", type(ex).__name__, ex)
+            _LOGGER.error("[AwqatSalah] Fehler beim Laden von DailyContent: %s", ex)
+
+        # Im Fehlerfall: Gib zurück was wir haben (auch wenn es vom Vortag ist),
+        # aber setze das Datum NICHT auf heute, damit es beim nächsten Intervall erneut versucht wird.
         return self._cached_daily.get("data")
 
     async def _get_eid_data(self) -> dict | None:
-        if self._cached_eid.get("year") == datetime.now().year and self._cached_eid.get("data"):
+        """Eid Gebetszeiten laden."""
+        year = datetime.now().year
+        if self._cached_eid.get("year") == year and self._cached_eid.get("data"):
             return self._cached_eid["data"]
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.api_url}/api/AwqatSalah/Eid/{self.city_id}",
-                    headers=self._headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    if response.status == 200:
-                        data   = await response.json()
-                        raw    = data.get("data", {})
-                        result = {s: raw.get(f) for s, f in EID_FIELD_MAP.items()}
-                        self._cached_eid = {"year": datetime.now().year, "data": result}
-                        await self._store_eid.async_save(self._cached_eid)
-                        return result
+            async with self._session.get(
+                f"{self.api_url}/api/AwqatSalah/Eid/{self.city_id}",
+                headers=self._headers,
+                timeout=20,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    raw = data.get("data", {})
+                    result = {s: raw.get(f) for s, f in EID_FIELD_MAP.items()}
+                    self._cached_eid = {"year": year, "data": result}
+                    await self._store_eid.async_save(self._cached_eid)
+                    return result
         except Exception as ex:
-            _LOGGER.warning("[AwqatSalah] Eid Fehler: %s", ex)
+            _LOGGER.debug("[AwqatSalah] Eid Info nicht verfügbar: %s", ex)
         return self._cached_eid.get("data")
 
     async def _fetch_and_cache(self) -> None:
+        """Gebetszeiten für das Jahr oder den Monat laden."""
         yearly = await self._fetch_yearly()
         if yearly:
             self._cached_data = {
@@ -263,22 +224,15 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
 
         monthly = await self._fetch_monthly()
         if monthly:
-            existing       = self._cached_data.get("entries", [])
-            existing_dates = {e.get("gregorianDateShort") for e in existing}
-            for entry in monthly:
-                if entry.get("gregorianDateShort") not in existing_dates:
-                    existing.append(entry)
             self._cached_data = {
                 "type": "monthly", "year": datetime.now().year,
-                "month": datetime.now().month, "entries": existing,
+                "month": datetime.now().month, "entries": monthly,
                 "fetched_at": datetime.now().isoformat(),
             }
             await self._save_cache()
-            return
-
-        _LOGGER.error("[AwqatSalah] Keine Daten von API verfügbar")
 
     async def _fetch_yearly(self) -> list | None:
+        """Jahresdaten laden."""
         year = datetime.now().year
         payload = {
             "cityId": self.city_id,
@@ -286,71 +240,118 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             "endDate":   f"{year}-12-31T00:00:00Z",
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.api_url}/api/AwqatSalah/Yearly",
-                    json=payload,
-                    headers=self._headers,
-                    timeout=aiohttp.ClientTimeout(total=60),
-                ) as response:
-                    if response.status == 200:
-                        data    = await response.json()
-                        entries = data.get("data", [])
-                        if entries and len(entries) > 31:
-                            return entries
+            async with self._session.post(
+                f"{self.api_url}/api/AwqatSalah/Yearly",
+                json=payload,
+                headers=self._headers,
+                timeout=40,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    entries = data.get("data", [])
+                    if entries and len(entries) > 31:
+                        return entries
         except Exception as ex:
-            _LOGGER.warning("[AwqatSalah] Yearly Fehler: %s", ex)
+            _LOGGER.warning("[AwqatSalah] Yearly API Fehler: %s", ex)
+        return None
+
+    async def _fetch_monthly_for(self, month: int, year: int) -> list | None:
+        """Daten für spezifischen Monat laden."""
+        try:
+            async with self._session.get(
+                f"{self.api_url}/api/AwqatSalah/Monthly/{self.city_id}",
+                headers=self._headers,
+                params={"month": month, "year": year},
+                timeout=20,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("data", [])
+        except Exception as ex:
+            _LOGGER.warning("[AwqatSalah] Monthly API Fehler (%s/%s): %s", month, year, ex)
         return None
 
     async def _fetch_monthly(self) -> list | None:
         return await self._fetch_monthly_for(datetime.now().month, datetime.now().year)
 
-    async def _fetch_monthly_for(self, month: int, year: int) -> list | None:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.api_url}/api/AwqatSalah/Monthly/{self.city_id}",
-                    headers=self._headers,
-                    params={"month": month, "year": year},
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get("data", [])
-        except Exception as ex:
-            _LOGGER.warning("[AwqatSalah] Monthly Fehler: %s", ex)
+    # ── Hilfsfunktionen ──────────────────────────────────────────────────────
+
+    def _get_today_from_cache(self, today: str) -> dict | None:
+        """Sucht heutigen Tag im Cache."""
+        for entry in self._cached_data.get("entries", []):
+            if entry.get("gregorianDateShort") == today:
+                return self._process_entry(entry)
         return None
 
-    async def _load_cache(self) -> None:
-        if self._cached_data:
+    def _process_entry(self, entry: dict) -> dict:
+        """Verarbeitet Rohdaten eines Tages."""
+        result = {}
+        for sensor, api_field in API_FIELD_MAP.items():
+            result[sensor] = entry.get(api_field, "")
+
+        # Sabah Berechnung (Güneş - 60 Min)
+        gunes = entry.get("sunrise", "")
+        if gunes:
+            try:
+                h, m = map(int, gunes.split(":"))
+                total = h * 60 + m - 60
+                result[SENSOR_SABAH] = f"{max(0, total // 60):02d}:{total % 60:02d}"
+            except Exception:
+                result[SENSOR_SABAH] = ""
+
+        result["hijriDateLong"]       = entry.get("hijriDateLong", "")
+        result["gregorianDateShort"]  = entry.get("gregorianDateShort", "")
+        return result
+
+    async def async_check_and_refresh_month(self) -> None:
+        """Prüft ob Monat gewechselt hat."""
+        if self._cached_data.get("type") == "monthly":
+            if self._cached_data.get("month") != datetime.now().month:
+                _LOGGER.info("[AwqatSalah] Neuer Monat erkannt, aktualisiere Daten...")
+                self._cached_data = {}
+                await self._fetch_and_cache()
+
+    async def _async_prefetch_next_month_if_needed(self) -> None:
+        """Lädt Daten für den Folgemonat am Ende des Monats vorab."""
+        now = datetime.now()
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        if now.day < last_day - 1:
             return
-        data = await self._store.async_load()
-        if data:
-            if data.get("year") and data["year"] != datetime.now().year:
-                _LOGGER.info("[AwqatSalah] Jahreswechsel erkannt, Cache erneuern")
-                return
-            self._cached_data = data
+
+        next_month = now.month + 1 if now.month < 12 else 1
+        next_year  = now.year if now.month < 12 else now.year + 1
+        
+        next_month_str = f".{next_month:02d}.{next_year}"
+        entries = self._cached_data.get("entries", [])
+        if any(next_month_str in e.get("gregorianDateShort", "") for e in entries):
+            return
+
+        _LOGGER.info("[AwqatSalah] Prefetching für Monat %s/%s", next_month, next_year)
+        monthly = await self._fetch_monthly_for(next_month, next_year)
+        if monthly:
+            existing_dates = {e.get("gregorianDateShort") for e in entries}
+            for entry in monthly:
+                if entry.get("gregorianDateShort") not in existing_dates:
+                    entries.append(entry)
+            self._cached_data["entries"] = entries
+            await self._save_cache()
+
+    # ── Storage ──────────────────────────────────────────────────────────────
+
+    async def _load_cache(self) -> None:
+        if not self._cached_data:
+            data = await self._store.async_load()
+            if data:
+                if data.get("year") == datetime.now().year:
+                    self._cached_data = data
 
     async def _load_daily_cache(self) -> None:
-        if self._cached_daily:
-            return
-        data = await self._store_daily.async_load()
-        if data:
-            self._cached_daily = data
+        if not self._cached_daily:
+            self._cached_daily = await self._store_daily.async_load() or {}
 
     async def _load_eid_cache(self) -> None:
-        if self._cached_eid:
-            return
-        data = await self._store_eid.async_load()
-        if data:
-            self._cached_eid = data
+        if not self._cached_eid:
+            self._cached_eid = await self._store_eid.async_load() or {}
 
     async def _save_cache(self) -> None:
         await self._store.async_save(self._cached_data)
-
-    async def async_check_and_refresh_month(self) -> None:
-        if self._cached_data.get("type") == "monthly":
-            if self._cached_data.get("month") != datetime.now().month:
-                _LOGGER.info("[AwqatSalah] Neuer Monat, lade neue Daten")
-                self._cached_data = {}
-                await self._fetch_and_cache()
