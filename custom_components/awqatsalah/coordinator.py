@@ -84,7 +84,7 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         self._midnight_unsub = async_track_time_change(
             self.hass,
             self._async_midnight_refresh,
-            hour=1, minute=5, second=0, # 01:05 Uhr deutscher Zeit
+            hour=1, minute=5, second=0,
         )
         _LOGGER.debug("[AwqatSalah] Midnight-Refresh für 01:05 Uhr registriert")
 
@@ -95,27 +95,25 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
 
     @callback
     def _async_midnight_refresh(self, _now: datetime) -> None:
-        """Cache-Reset für den neuen Tag."""
-        _LOGGER.debug("[AwqatSalah] Cache wird für neuen Tag freigegeben.")
-        self._cached_daily = {} 
-        self.hass.async_create_task(self._async_clear_daily_and_refresh())
-
-    async def _async_clear_daily_and_refresh(self) -> None:
-        await self._store_daily.async_remove()
-        await self.async_refresh()
+        """Cache wird nicht mehr gelöscht, nur das Update wird getriggert."""
+        _LOGGER.debug("[AwqatSalah] 01:05 Uhr erreicht. Starte täglichen Refresh-Zyklus.")
+        self.hass.async_create_task(self.async_refresh())
 
     # ── Hauptupdate ──────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict:
         today = datetime.now().strftime("%d.%m.%Y")
 
+        # Caches laden falls nötig
         await self._load_cache()
         await self._load_daily_cache()
         await self._load_eid_cache()
 
+        # Monatspflege
         await self.async_check_and_refresh_month()
         await self._async_prefetch_next_month_if_needed()
 
+        # Gebetszeiten holen
         prayer_data = self._get_today_from_cache(today)
         if not prayer_data:
             await self._fetch_and_cache()
@@ -124,6 +122,7 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
         if not prayer_data:
             raise UpdateFailed("Keine Gebetszeiten für heute verfügbar")
 
+        # Daily Content und Eid Daten laden (mit intelligenter Cache-Logik)
         daily_content = await self._get_daily_content(today)
         eid_data      = await self._get_eid_data()
 
@@ -138,7 +137,8 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
     # ── API & Content Logik ──────────────────────────────────────────────────
 
     async def _get_daily_content(self, today: str) -> dict | None:
-        """Holt Daily Content. Falls leer, kein Cache für heute -> Retry beim nächsten Scan."""
+        """Holt Daily Content. Zeigt alte Daten, bis neue valide Daten da sind."""
+        # Falls wir für HEUTE schon erfolgreich geladen haben, nutze das
         if self._cached_daily.get("date") == today and self._cached_daily.get("data"):
             return self._cached_daily["data"]
 
@@ -146,34 +146,51 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
             async with self._session.get(
                 f"{self.api_url}/api/DailyContent",
                 headers=self._headers,
-                timeout=40, # Großzügig für Render-Aufwachzeit
+                timeout=40,
             ) as response:
                 if response.status == 200:
                     data = await response.json()
                     raw = data.get("data", {})
                     result = {s: raw.get(f) for s, f in DAILY_CONTENT_FIELD_MAP.items()}
                     
-                    # Validierung: Hat der Response echten Inhalt?
-                    # Verhindert, dass leere API-Daten den Cache für heute blockieren
+                    # Validierung: Nur speichern, wenn echter Inhalt vorhanden ist
                     if any(str(v).strip() for v in result.values() if v):
                         self._cached_daily = {"date": today, "data": result}
                         await self._store_daily.async_save(self._cached_daily)
-                        _LOGGER.info("[AwqatSalah] Daily Content für %s geladen", today)
+                        _LOGGER.info("[AwqatSalah] Daily Content für %s erfolgreich aktualisiert", today)
                         return result
                     
-                    _LOGGER.info("[AwqatSalah] API liefert noch keine neuen Daten. Retry folgt.")
+                    _LOGGER.info("[AwqatSalah] API hat noch keinen neuen Content. Nutze vorhandenen Cache.")
                 else:
                     _LOGGER.warning("[AwqatSalah] Daily Content HTTP %s", response.status)
 
         except Exception as ex:
-            _LOGGER.error("[AwqatSalah] Fehler beim Daily Content: %s", ex)
+            _LOGGER.error("[AwqatSalah] Fehler beim Daily Content Update: %s", ex)
 
+        # Im Fehlerfall oder bei leerer API: Zeige alten Content weiter an.
+        # Da 'date' ungleich 'today' bleibt, wird beim nächsten Scan automatisch ein Retry versucht.
         return self._cached_daily.get("data")
 
     async def _get_eid_data(self) -> dict | None:
-        year = datetime.now().year
-        if self._cached_eid.get("year") == year and self._cached_eid.get("data"):
-            return self._cached_eid["data"]
+        """Eid Daten mit 30-Tage-Refresh Logik."""
+        now = datetime.now()
+        year = now.year
+        
+        # Prüfen, ob Refresh nötig: Jahr gewechselt, Cache leer oder > 30 Tage alt
+        last_fetched_str = self._cached_eid.get("fetched_at", "2000-01-01T00:00:00")
+        try:
+            last_fetched = datetime.fromisoformat(last_fetched_str)
+        except ValueError:
+            last_fetched = datetime(2000, 1, 1)
+
+        needs_refresh = (
+            self._cached_eid.get("year") != year or 
+            (now - last_fetched) > timedelta(days=30) or
+            not self._cached_eid.get("data")
+        )
+
+        if not needs_refresh:
+            return self._cached_eid.get("data")
 
         try:
             async with self._session.get(
@@ -185,14 +202,23 @@ class AwqatSalahCoordinator(DataUpdateCoordinator):
                     data = await response.json()
                     raw = data.get("data", {})
                     result = {s: raw.get(f) for s, f in EID_FIELD_MAP.items()}
-                    self._cached_eid = {"year": year, "data": result}
-                    await self._store_eid.async_save(self._cached_eid)
-                    return result
-        except Exception:
-            pass
+                    
+                    if any(result.values()):
+                        self._cached_eid = {
+                            "year": year, 
+                            "data": result,
+                            "fetched_at": now.isoformat()
+                        }
+                        await self._store_eid.async_save(self._cached_eid)
+                        _LOGGER.debug("[AwqatSalah] Eid Daten für das Jahr %s aktualisiert", year)
+                        return result
+        except Exception as ex:
+            _LOGGER.debug("[AwqatSalah] Eid Update fehlgeschlagen (nutze Cache): %s", ex)
+            
         return self._cached_eid.get("data")
 
     async def _fetch_and_cache(self) -> None:
+        """Lädt Jahres- oder Monatsdaten."""
         yearly = await self._fetch_yearly()
         if yearly:
             self._cached_data = {
